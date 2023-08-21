@@ -8,9 +8,7 @@ import hashlib
 from distutils.util import strtobool
 
 
-#
 # Get arguments
-#
 parser = argparse.ArgumentParser(description='Read MBOX file and create EML file from every email in it.')
 parser.add_argument("--file", "-f", type=str, required=True, help='Input .mbox file.')
 parser.add_argument("--output", "-o", type=str, required=True, help='Output directory, where the .eml files should go.')
@@ -29,16 +27,10 @@ has_output_folder_timestamp = True if args.hastimestamp == 1 else False
 prompt_at_start = True if args.silent is False else False
 # print ("prompt_at_start: %s") % prompt_at_start
 
-
-#
 # Create mapping of month-abbr -> month-numbers
-#
 month_abbr_to_int = {name: num for num, name in enumerate(calendar.month_abbr) if num}
 
-
-#
 # Count emails to print an estimation
-#
 estimate_blank_lines_count = 2
 email_amount_estimate = 0;
 
@@ -48,19 +40,12 @@ with open(args.file, "r") as mbox_file:
 
         if estimate_blank_lines_count >= 1 and line_stripped.startswith('From '):
             email_amount_estimate += 1
-
-        if line_stripped == '':
-            estimate_blank_lines_count += 1
-        else:
-            estimate_blank_lines_count = 0
+        estimate_blank_lines_count += 1 if line_stripped == '' else 0
 
 if email_amount_estimate >= 0:
     print ("Estimated amount of emails to create: %d" % email_amount_estimate)
 
-
-#
 # Prompt for start
-#
 yes = {'yes','y'}
 no = {'no','n', ''}
 choice = input('Start process? [y|n] ').lower() if prompt_at_start == True else 'y'
@@ -79,9 +64,7 @@ if start_process == False:
     sys.exit('Aborted.')
 
 
-#
 # Create output folder
-#
 folder_suffix = " {}".format(int(time.time())) if has_output_folder_timestamp == True else ""
 folder_name = os.path.basename(args.file).replace(".mbox", folder_suffix)
 # print ("folder_name: %s") % folder_name
@@ -98,93 +81,75 @@ else:
     print ("Directory already exist: '%s' " % output_dir)
 
 
-#
-# Loop lines of given file
-#
-blank_lines_count = 2
-file_count = 0
-file_skipped_count = 0
-is_dupe = False
+def create_new_file(line_parts, line_stripped):
+    # Create file name
+    msg_year = line_parts[7]
+    month_int = month_abbr_to_int[line_parts[3]]
+    msg_month = "0{}".format(month_int) if month_int < 10 else "{}".format(month_int)
+    msg_day = line_parts[4]
+    msg_time = line_parts[5].replace(':', '')
+    msg_hash = hashlib.sha1(line_stripped.encode("UTF-8")).hexdigest()
 
-with open(args.file, "r") as mbox_file:
-    print ("Processing file: '%s'" % args.file)
-    print ("Please wait ...")
+    file_name = "{year}-{month}-{day} {time} {unique}.{ext}".format(year = msg_year, month = msg_month, day = msg_day, time = msg_time, unique = msg_hash[:10], ext = output_file_ext)
+    # print ("file_name: %s") % file_name
 
-    for line in mbox_file:
-        line_stripped = line.strip()
-        line_parts = line_stripped.split(' ')
+    file_output = os.path.join(output_dir, file_name)
+    # print ("file_output: %s") % file_output
 
-        #
-        # New file starts at 'From ' string
-        #
-        if blank_lines_count >= 1 and line_stripped.startswith('From '):
-            # NOTE: The with in 'with open() as file:' handles closing (?)
-            # if 'new_file' in locals():
-            #     new_file.close()
+    # Handle duplicates
+    is_dupe = True if os.path.isfile(file_output) == True else False
 
-            #
-            # Create file name
-            #
-            msg_year = line_parts[7]
-            month_int = month_abbr_to_int[line_parts[3]]
-            msg_month = "0{}".format(month_int) if month_int < 10 else "{}".format(month_int)
-            msg_day = line_parts[4]
-            msg_time = line_parts[5].replace(':', '')
-            msg_hash = hashlib.sha1(line_stripped.encode("UTF-8")).hexdigest()
+    if is_dupe:
+        print ("File skipped: '%s'" % file_output)
+        return None, True
 
-            file_name = "{year}-{month}-{day} {time} {unique}.{ext}".format(year = msg_year, month = msg_month, day = msg_day, time = msg_time, unique = msg_hash[:10], ext = output_file_ext)
-            # print ("file_name: %s") % file_name
+    # Create file
+    new_file = open(file_output, "a")
+    print ("File created: '%s'" % file_output)
 
-            file_output = os.path.join(output_dir, file_name)
-            # print ("file_output: %s") % file_output
+    return new_file, False
 
-            #
-            # Handle duplicates
-            #
-            is_dupe = True if os.path.isfile(file_output) == True else False
 
-            if is_dupe == True:
-                file_skipped_count += 1
-                print ("File skipped: '%s'" % file_output)
+def create_eml_files():
+    # Loop lines of given file
+    blank_lines_count = 2
+    file_count = 0
+    file_skipped_count = 0
+    is_dupe = False
+
+    with open(args.file, "r") as mbox_file:
+        print ("Processing file: '%s'" % args.file)
+        print ("Please wait ...")
+
+        for line in mbox_file:
+            line_stripped = line.strip()
+            line_parts = line_stripped.split(' ')
+
+            # New file starts at 'From ' string
+            is_start_of_new_file = blank_lines_count >= 1 and line_stripped.startswith('From ')
+            
+            # If this is the start of a new file, try to create it and increment our counts.
+            if is_start_of_new_file:
+                try:
+                    new_file, is_dupe = create_new_file(line_parts, line_stripped)
+                    file_skipped_count += 1 if is_dupe else 0
+                    file_count += 1 if not is_dupe else 0
+                except:
+                    # This wasn't actually the start of a new file, continue as usual
+                    is_start_of_new_file = False
+
+            # If we start a new file that already exists, it's a dupe and we want to skip
+            # all mbox lines until we reach the next file
+            if not is_start_of_new_file and is_dupe:
+                # Handle duplicates
                 continue
 
-            #
-            # Create file
-            #
-            new_file = open(file_output, "a")
-            file_count += 1
-            print ("File created: '%s'" % file_output)
-
-            #
-            #  Write line to file
-            #
             new_file.write("%s" % line)
+            # Count blank lines to locate new file starts
+            blank_lines_count = blank_lines_count + 1 if line_stripped == '' else 0
 
-        else:
-            #
-            # Handle duplicates
-            #
-            if is_dupe == True:
-                continue
+    print ("Done.")
+    print ("Created %d files." % file_count)
+    print ("Skipped %d files." % file_skipped_count)
 
-            #
-            # Open file
-            #
-            new_file = open(file_output, "a")
-
-            #
-            # Write line to file
-            #
-            new_file.write("%s" % line)
-
-        #
-        # Count blank lines to locate new file starts
-        #
-        if line_stripped == '':
-            blank_lines_count += 1
-        else:
-            blank_lines_count = 0
-
-print ("Done.")
-print ("Created %d files." % file_count)
-print ("Skipped %d files." % file_skipped_count)
+create_eml_files()
